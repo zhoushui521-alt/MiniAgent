@@ -1,271 +1,96 @@
-<p align="center">
-  <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
-</p>
+# MiniAgent（个人编码智能体改进项目）
 
-<p align="center">
-  <strong>A small, readable terminal coding agent — and a working example of how coding agents are built.</strong>
-</p>
+基于 [Tau（原项目）](https://github.com/huggingface/tau) 的个人改进版本，重点解决两个实际问题：**工具参数写错后，模型拿不到有效的纠错信息；任务持续消耗资源或反复失败时，没有可配置的停止策略。**
 
-<p align="center">
-  <a href="https://twotimespi.dev/">Documentation</a>
-  ·
-  <a href="https://twotimespi.dev/quickstart/">Quickstart</a>
-  ·
-  <a href="https://twotimespi.dev/internals/architecture/">Architecture</a>
-  ·
-  <a href="https://pypi.org/project/tau-ai/">PyPI</a>
-  ·
-  <a href="https://github.com/huggingface/tau/issues/1">Roadmap</a>
-</p>
+这不是从零编写的智能体框架。模型适配、工具执行循环、终端界面和会话持久化来自上游；本项目在现有边界上补充纠错反馈和运行策略，并保留原项目历史与许可证。
 
-<p align="center">
-  <strong><a href="https://link.alejandro-ao.com/tau-discord">Join the Tau Discord community →</a></strong>
-</p>
+## 我做了哪些改动
 
----
+| 改动 | 原来的问题 | 本项目的实现 |
+| --- | --- | --- |
+| 工具坏参数反馈 | 参数解析失败后被静默放进 `_raw_arguments`（原始参数占位键），工具往往只报缺字段，模型不知道真正错在哪里 | 五个解析入口标记异常原文；执行前返回明确的结构化错误与重试提示，不执行错误调用 |
+| 单次运行策略 | 可以继续、重试和压缩上下文，但缺少本轮费用、用量和连续失败的停止判断 | 增加费用、词元用量、连续错误轮次阈值，支持请求总结或硬停止，默认全部关闭 |
 
-## What is Tau?
+### 1. 工具参数错误能反馈给模型
 
-**Tau is a coding agent that lives in your terminal.** You type requests like
-"explain this repo", "add tests", or "fix this stack trace"; Tau can read files,
-edit code, run commands, and keep a durable session history while streaming what
-it is doing.
+- 覆盖 Anthropic（模型供应商）、Mistral（模型供应商）、Codex（模型接口），以及 OpenAI-compatible（兼容接口）的聊天和响应两种路径，共五个解析入口。
+- `ToolCall.malformed_arguments_text`（工具调用异常原文标记）只在进程内传递，不写入序列化数据；持久诊断由工具结果消息保存。
+- 保留扩展门禁和取消检查的优先级，随后拦截坏参数，向模型返回原文、错误原因和可执行的修正提示。
+- 保持现有工具和消息事件形状，旧会话仍可读取；空参数流维持原来的空对象行为。
 
-Tau is also meant to be read. It is a teaching project for understanding the
-shape of a coding-agent system without starting from a giant production
-codebase.
+对应提交：[ce3ae6f（纠错反馈）](https://github.com/zhoushui521-alt/MiniAgent/commit/ce3ae6f)。
 
-```text
-tau_coding  →  tau_agent  →  tau_ai
-```
+### 2. 运行过程中可以判断何时该停
 
-- `tau_ai` translates model providers into Tau's provider-neutral stream.
-- `tau_agent` owns the portable brain: messages, tools, events, loop, harness,
-  and session primitives.
-- `tau_coding` wraps the brain as a real coding app: CLI, TUI, file/shell tools,
-  provider config, project instructions, skills, and on-disk sessions.
+- `RunPolicyMonitor`（运行策略监听器）放在编码应用层，订阅现有事件，不让可复用的核心智能体依赖产品策略。
+- 可配置本轮费用、累计词元、连续错误轮次三个阈值。模型请求失败，或该轮任一工具失败，都会计为一个错误轮次；成功轮次清零错误连续计数。
+- 每次用户发起新的运行时重置计数；同一轮运行中的内部重试、转向消息和后续排队消息不重置。
+- `steer`（请求总结）向模型发送收尾指令；`cancel`（硬停止）在完整轮次结束后停止，阻止下一次模型请求和自动重试。
+- 补齐命令行、终端界面、远程调用入口的配置传递，以及会话替换和关闭时的监听器管理。
 
-The important boundary is:
+对应提交：[a1a6ccd（运行策略）](https://github.com/zhoushui521-alt/MiniAgent/commit/a1a6ccd)。
 
-```text
-AgentHarness = reusable brain
-CodingSession = coding-agent environment
-TUI = one possible frontend
-```
+## 使用本项目
 
-The core does not know about Textual, Rich, local config paths, slash commands,
-or rendering. Frontends consume events.
-
-## Install
-
-Tau is published on PyPI as `tau-ai` and installs a `tau` command.
-It requires Python 3.12 or newer. The recommended installers use
-[`uv`](https://docs.astral.sh/uv/) and install it first when necessary.
-
-macOS and Linux:
+需要 Python（编程语言）3.12 或更高版本，以及 uv（环境与包管理工具）。从本仓库源码运行，才能使用这里的改动：
 
 ```bash
-curl -LsSf https://twotimespi.dev/install.sh | sh
-```
+# 下载本项目
+git clone https://github.com/zhoushui521-alt/MiniAgent.git
+cd MiniAgent
 
-Windows PowerShell:
+# 按锁文件安装依赖
+uv sync --dev --locked
 
-```powershell
-irm https://twotimespi.dev/install.ps1 | iex
-```
-
-The installers do not use `sudo`. They announce before installing `uv`, install
-Tau in an isolated tool environment, verify `tau --version`, and report if a
-shell restart is needed. You can [inspect the shell installer](https://twotimespi.dev/install.sh)
-or [PowerShell installer](https://twotimespi.dev/install.ps1) before running it.
-
-Already have a package manager? Install Tau directly:
-
-```bash
-uv tool install tau-ai
-# or
-pipx install tau-ai
-# or
-python -m pip install tau-ai
-```
-
-Then check it worked:
-
-```bash
-tau --version
-```
-
-Tau is also available on [conda-forge](https://conda-forge.org), and can be installed using [pixi](https://pixi.prefix.dev/latest/#installation):
-
-```bash
-pixi global install tau-ai
-```
-
-Upgrade a normal installation with:
-
-```bash
-tau update
-```
-
-For local development:
-
-```bash
-git clone https://github.com/huggingface/tau.git
-cd tau
-uv sync --dev
-uv run tau --version
-```
-
-To make the checkout-backed command available globally, install it as an
-editable tool:
-
-```bash
-uv tool install --editable --force .
-```
-
-Run that command again after `git pull`. Editable installs expose source-code
-changes immediately, but the tool environment's package metadata, dependencies,
-and entry points are only refreshed when uv reinstalls the tool. Without the
-refresh, `tau --version` can still show the version from the previous install.
-
-## Quickstart
-
-Run Tau from the project you want it to work on:
-
-```bash
-cd my-project
-tau
-```
-
-Then type a request and press **Enter**:
-
-```text
-explain what this project does
-```
-
-One-shot print mode is useful for scripts and quick prompts:
-
-```bash
-tau -p "summarize the architecture"
-tau --cwd /path/to/project -p "find the CLI entry point"
-```
-
-Tau needs a model provider. Start Tau and connect one with `/login`:
-
-```bash
-tau
-```
-
-```text
-/login
-/login openai
-/login openai-codex
-/model
-```
-
-Tau ships with support for OpenAI, Anthropic, OpenAI Codex subscription auth,
-OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints, including local
-models. See the [providers guide](https://twotimespi.dev/guides/providers-and-models/).
-
-The built-in catalog lives in `src/tau_coding/data/catalog.toml`; add your own
-providers and models by dropping a `~/.tau/catalog.toml` with the same schema —
-no code changes required.
-
-## What Tau can do
-
-- Interactive Textual TUI and non-interactive print mode.
-- Built-in coding tools: `read`, `write`, `edit`, and `bash`.
-- Durable JSONL sessions under `~/.tau/sessions/` with resume and branching.
-- Slash commands for login, model selection, sessions, compaction, export, theme,
-  and more.
-- Project instructions from `AGENTS.md`, `.tau/`, and `.agents/` resources.
-- User skills, prompt templates, and custom TUI themes.
-- Context accounting, manual compaction, and optional automatic compaction.
-- Provider-neutral event rendering for Rich, plain text, JSON, transcripts, and
-  custom frontends.
-
-## Philosophy
-
-Tau follows a few rules:
-
-- **Small layers beat magic.** Each package has one job and can be read alone.
-- **Events are the contract.** Providers, renderers, the TUI, and custom
-  frontends meet at a typed event stream.
-- **The core stays portable.** The reusable harness does not depend on the CLI,
-  Textual, Rich, or Tau's file layout.
-- **Tools are ordinary typed functions.** A tool is a schema plus an async
-  executor returning a structured result.
-- **Sessions are durable and inspectable.** History is append-only JSONL; active
-  context can be compacted without rewriting the record.
-- **Documentation follows implementation.** The public docs explain the result;
-  `dev-notes/` preserves the phase-by-phase build journal.
-
-## Use Tau as a library
-
-```python
-from tau_agent import AgentHarness, AgentHarnessConfig
-
-harness = AgentHarness(
-    AgentHarnessConfig(
-        provider=provider,
-        model="my-model",
-        system="You are a helpful coding agent.",
-        tools=tools,
-    )
-)
-
-async for event in harness.prompt("Explain this package"):
-    print(event)
-```
-
-Because the harness emits events instead of rendering UI directly, the same core
-can drive the built-in TUI, print mode, or a frontend you build yourself.
-
-## Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for project philosophy, layer boundaries, testing expectations, and pull request guidelines.
-
-```bash
-uv sync --dev
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
-```
-
-Run Tau from the checkout:
-
-```bash
+# 启动交互界面；首次使用需配置模型供应商及凭据
 uv run tau
-uv run tau -p "explain this repo"
 ```
 
-Run the Hugo documentation site:
+代码包名仍为 `tau-ai`（上游包名），命令仍为 `tau`（启动命令）；没有单独发布新的软件包。直接安装上游发行包，并不等于安装本项目的改动。基础操作可参考 [Tau 官方文档（上游使用说明）](https://twotimespi.dev/)。
 
-```bash
-cd website
-hugo server -D
+### 开启运行限制
+
+编辑用户目录中的 `~/.tau/settings.json`（运行配置文件）：
+
+```json
+{
+  "runPolicies": {
+    "maxCostUsd": 1.0,
+    "maxTokens": 50000,
+    "maxConsecutiveErrorTurns": 3,
+    "action": "steer"
+  }
+}
 ```
 
-Open <http://localhost:1313/>. Build with `hugo --minify`.
+三个阈值依次是美元费用、累计词元用量、连续错误轮次。省略阈值或设为 `null`（空值）即关闭；修改后重启程序。完整配置见[配置参考](website/content/reference/configuration.md#run-policies)。
 
-## Documentation
+**这些限制不是严格的账单封顶。** 检查发生在本轮工具执行结束之后，当前轮次可能超限；请求总结也会继续消耗用量，模型不一定服从。费用未知的响应不会计入费用，但仍计入用量和错误阈值；单独的会话命名、上下文压缩和分支总结请求不在监听统计范围内。
 
-User docs are published at <https://twotimespi.dev/> and live in
-`website/content/`.
+## 验证情况
 
-Useful entry points:
+以下为 2026-09-30 开发阶段的本地验证记录，本次发布未重新运行测试，也未调用付费模型：
 
-- [What is Tau?](https://twotimespi.dev/what-is-tau/)
-- [Quickstart](https://twotimespi.dev/quickstart/)
-- [Core concepts](https://twotimespi.dev/concepts/)
-- [Architecture overview](https://twotimespi.dev/internals/architecture/)
-- [The agent loop & events](https://twotimespi.dev/internals/agent-loop/)
-- [CLI reference](https://twotimespi.dev/reference/cli/)
+- 新增测试：70 项通过，其中坏参数反馈 42 项、运行策略 28 项。
+- 新测试加核心回归与配置检查：184 项通过。
+- 全量测试：2031 项通过、46 项失败、5 项跳过。46 个失败用例均在未修改的上游基线复现；全量运行早于最后三个策略测试的加入，新增部分另行通过验证。
+- 静态规范、修改文件格式和差异空白检查通过。
+- 类型检查存在 14 个既有平台锁相关报错，在上游基线同样复现。
 
-Tau is under active development. The implementation roadmap is tracked in
-[GitHub issue #1](https://github.com/huggingface/tau/issues/1).
+不能把这些结果解释为所有平台全量通过或真实模型任务验收。详细证据、计费范围和行为取舍见[开发记录](dev-notes/aci-feedback-and-run-policies.md)。
 
-## License
+## 与上游的关系
 
-Tau is released under the [MIT License](LICENSE).
+本项目保留 Tau（原项目）的分层方式：模型适配层、可复用智能体核心、编码应用层。没有新增依赖，也没有重写核心循环的轮次结构。
+
+两项改动已提交到 [上游拉取请求 #755](https://github.com/huggingface/tau/pull/755)。创建时处于待审阅状态，不代表已被上游接收；最新状态以链接为准。个人项目首页与公开文件边界仅放在本仓库，不混入该拉取请求。
+
+## 公开文件边界
+
+本仓库公开项目源码、测试、实现方案和说明文档，不包含本地模型凭据、个人会话、开发环境配置、私人《项目说明》以及尚未决定公开的架构图解。实际凭据保存在本机，不要放入版本管理。
+
+上游工作流文件保留作参考，本仓库发布时未启用自动工作流，不自动运行测试或部署文档。
+
+## 许可证与来源
+
+遵循 [MIT License（开源许可证）](LICENSE)，保留原作者 Alejandro AO（上游作者）的版权声明。MiniAgent（本项目）是对 Tau（原项目）的增量改进；上游已有能力不作为本人的原创贡献。

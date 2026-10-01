@@ -25,3 +25,15 @@ website/.hugo_build.lock
 .firecrawl/
 # Local scratch tooling
 scripts/analyze_session.py
+
+# MiniAgent local-only configuration and personal materials
+/.agents/
+/.codex/
+/.mcp.json
+/.aws/
+/.tau/
+/.env
+/.env.*
+!/.env.example
+/项目说明.md
+/dev-notes/architecture-diagrams/
